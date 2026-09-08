@@ -79,10 +79,10 @@ def barchart(r2, src, dst, out, top_n):
     d = pd.DataFrame(sorted(r2.items(), key=lambda kv: kv[1]), columns=['feature', 'cv_r2'])
     if len(d) > top_n:
         d = d.tail(top_n)                                   # keep the top-N by R^2
+    colors = ['#007786' if v > 0.8 else '#9ca3af' for v in d['cv_r2']]   # highlight R^2 > 0.8
     fig, ax = plt.subplots(figsize=(7, max(3, 0.32 * len(d) + 1)))
-    ax.barh(d['feature'], d['cv_r2'].clip(lower=0), color='#059669')
+    ax.barh(d['feature'], d['cv_r2'].clip(lower=0), color=colors)
     ax.set_xlabel(f'CV $R^2$  ({src} latent $\\rightarrow$ {dst} feature)')
-    ax.set_title(f'What {dst} features does the {src} representation encode?')
     ax.axvline(0.8, ls='--', c='grey', lw=1); ax.set_xlim(0, 1)
     fig.tight_layout(); fig.savefig(out, dpi=300); plt.close(fig)
 

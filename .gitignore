@@ -30,3 +30,11 @@ gradcam/*.png
 
 # internal working notes (kept local)
 RUNS_REGISTRY.md
+gradcam/REFERENCES.md
+
+# poster/presentation assets (kept local)
+poster_figures/
+
+# stray figures at repo root (kept local)
+/gradcam_cnn.png
+/gradcam_grid.png
