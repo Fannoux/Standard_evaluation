@@ -1,0 +1,34 @@
+# Environment for the medaka phenotyping benchmark: the cross-method evaluation
+# (standard_eval, representation comparison, Grad-CAM, occlusion, heritability/CKA) and the
+# feature extractors for all methods (CNN, VAE, ShapeEmbed, RegionProps).
+#
+# Python 3.12. Install with:  pip install -r requirements.txt
+# Versions pinned from the working venv snapshot (2026-06); loosen with >= for future dev.
+
+# --- Deep learning (CNN / VAE / ShapeEmbed backbones) ---
+torch==2.12.0
+torchvision==0.27.0
+torchmetrics==1.9.0
+
+# --- Scientific / data ---
+numpy==2.4.6
+pandas==2.3.3
+scipy==1.17.1
+scikit-learn==1.9.0
+
+# --- Image I/O & processing ---
+scikit-image==0.26.0      # RegionProps descriptors, contour extraction, mask I/O
+rasterio==1.5.0           # 16-bit / multi-page .tif microscopy images
+pillow==12.2.0
+
+# --- Plotting ---
+matplotlib==3.11.0
+seaborn==0.13.2
+
+# --- Experiment tracking & config ---
+mlflow==3.13.0
+PyYAML==6.0.3
+
+# --- Utilities ---
+tqdm==4.68.2
+requests                  # ShapeEmbed data-prep helper (version not in the snapshot; unpinned)
