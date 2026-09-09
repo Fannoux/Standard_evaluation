@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
 """
 Plot holdout test-set results: confusion matrices, per-class recall, method comparison.
-pandas + seaborn + matplotlib. Everything is driven by the CONFIG block below -- tweak freely.
-
-Inputs (already produced by standard_eval), all under RESULTS_DIR:
-  - all_methods_comparison.csv                              (metrics per method/task/classifier)
-  - confusion_ECCV_FROZEN_<tag>_Test_<task>_<clf>.csv       (raw NxN counts, no header)
-
-Run:  python plot_holdout_results.py      -> writes PNGs into RESULTS_DIR/figures/
+  python plot_holdout_results.py      # writes PNGs into RESULTS_DIR/figures/
 """
 import os
 import numpy as np
@@ -21,14 +15,13 @@ RESULTS_DIR = os.path.join(HERE, 'HOLDOUT_TestSet_Results', 'ECCV_frozen_TrainTe
 COMPARISON_CSV = os.path.join(RESULTS_DIR, 'all_methods_comparison.csv')
 OUT_DIR = os.path.join(RESULTS_DIR, 'figures')
 
-# display name -> the FULL <tag> in the confusion filename confusion_ECCV_FROZEN_<tag>_<task>_<clf>.csv
-# (note: CNN/ShapeEmbed/RegionProps carry a _Test suffix, the two VAE runs do not)
+# display name to <tag> in confusion_ECCV_FROZEN_<tag>_<task>_<clf>.csv
+# CNN/ShapeEmbed/RegionProps carry a _Test suffix; VAE runs do not
 METHODS = {
     'CNN':            'CNN_Test',
     'ShapeEmbed':     'ShapeEmbed_Test',
     'RegionProps':    'RegionProps_Test',
-    'VAE (spring)':   'VAE_spring',
-    'VAE (ethereal)': 'VAE_ethereal',
+    'VAE':            'VAE',
 }
 CLASSIFIER = 'RF'                                   # 'RF' or 'LogReg'
 CLASS_NAMES  = ['SC0', 'SC1', 'SC2', 'SC3', 'SC4']  # 5-class labels
@@ -126,5 +119,5 @@ if __name__ == '__main__':
     plot_per_class_recall('5class')
     plot_metric_comparison(('quadKappa', 'macroF1', 'acc'), '5class')
     plot_metric_comparison(('quadKappa', 'macroF1', 'acc'), 'binary')
-    # plt.show()   # uncomment to view interactively instead of just saving
+    # plt.show()
     print('done.')

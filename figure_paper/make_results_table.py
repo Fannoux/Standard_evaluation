@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-Emit the LaTeX results table(s) from an all_methods_comparison.csv (standard_eval output).
-Tweak the CONFIG block: which comparison CSV, which methods/tags, which VAE run, class prior.
-
+Emit the LaTeX results table from all_methods_comparison.csv.
   python make_results_table.py            # prints LaTeX to stdout
 """
 import os
@@ -13,27 +11,26 @@ import pandas as pd
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEST_CSV = os.path.join(HERE, 'HOLDOUT_TestSet_Results', 'ECCV_frozen_TrainTest', 'all_methods_comparison.csv')
 
-# display name -> tag in the CSV 'method' column, in the order to print
+# display name to CSV 'method' tag, in print order
 METHODS = [
     ('RegionProps',      'ECCV_FROZEN_RegionProps_Test'),
     ('CNN',              'ECCV_FROZEN_CNN_Test'),
     ('ShapeEmbed',       'ECCV_FROZEN_ShapeEmbed_Test'),
-    ('VAE (spring)',     'ECCV_FROZEN_VAE_spring'),      # TODO: rename to the config that distinguishes them
-    ('VAE (ethereal)',   'ECCV_FROZEN_VAE_ethereal'),    #       (e.g. VAE ($\beta$=..) / latent size)
+    ('VAE',              'ECCV_FROZEN_VAE'),
 ]
-CLASS_PRIOR = [366, 1009, 347, 110, 19]                 # SC0..SC4 test counts (for the majority baseline)
+CLASS_PRIOR = [366, 1009, 347, 110, 19]                 # per-class test counts (majority baseline)
 METRICS = [('acc', 'Acc'), ('macroF1', 'F1'), ('quadKappa', r'$\kappa$')]
-BOLD_METRICS = {'macroF1', 'quadKappa'}                 # accuracy is NOT bolded (majority-baseline trap)
+BOLD_METRICS = {'macroF1', 'quadKappa'}                 # accuracy not bolded
 # ===================================================================
 
 
 def majority_baseline():
     p = np.array(CLASS_PRIOR); N = p.sum(); maj = p.argmax()
-    # 5-class: predict the majority class
+    # 5-class: predict majority
     acc5 = p[maj] / N
     f1_maj = 2 * (p[maj]/N) / ((p[maj]/N) + 1)            # prec=p_maj/N, rec=1
     mf5 = f1_maj / len(p)
-    # binary: no-kink (SC0) vs kink (SC1+); majority = kink
+    # binary: class 0 vs 1+; majority = 1+
     nk = p[0]; k = p[1:].sum()
     accb = k / N
     f1_k = 2 * (k/N) / ((k/N) + 1)
@@ -47,7 +44,7 @@ def cell(v, best):
 
 
 def build(df):
-    rows = {}   # (disp, clf) -> {task: {metric: val}}
+    rows = {}   # (disp, clf): {task: {metric: val}}
     dims = {}
     for disp, tag in METHODS:
         sub = df[df['method'] == tag]
@@ -60,7 +57,7 @@ def build(df):
             for m, _ in METRICS:
                 rows[(disp, r['classifier'])][r['task']][m] = float(r[m])
 
-    # best per (task, metric) column across all method/clf rows (exclude baseline)
+    # best per (task, metric) column, excluding baseline
     best = {}
     for task in ('5class', 'binary'):
         for m, _ in METRICS:

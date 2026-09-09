@@ -1,31 +1,11 @@
 #!/usr/bin/env python3
 r"""
-Heritability alignment of representations: how much each representation's geometry reflects
-GENETIC relatedness. Dimension-invariant -> CNN (512-d) and RegionProps (19-d) compare fairly.
+Heritability alignment: how much each representation's geometry reflects genetic relatedness.
+Dimension-invariant, so representations of different D compare fairly.
+Per method: CKA(Gram, GRM) plus off-diagonal pair-correlation. Reads GCTA/PLINK native files.
 
-Per method:  CKA(X Xᵀ, GRM)  [headline, 0..1]  and off-diagonal pair-correlation [HE flavour].
-Reads GCTA/PLINK native files (binary GRM + .pheno_formatted + gcta.cov). Fish are matched on IID
-(2nd column) — the sequencing_id — which is shared across all of the files.
-
-USAGE (on the cluster, from the genetics input dir):
-  python heritability_cka.py \
-    --relmat-bin input.grm.bin --relmat-id input.grm.id \
-    --covariates gcta.cov \
-    --feats CNN=CNN_gcta.pheno_formatted_norm \
-            RegionProps=RegionProps_gcta.pheno_formatted_norm \
-            ShapeEmbed=shapeembed_gcta.pheno_formatted_norm \
-            VAE_spring=vae_spring-sweep-14_gcta.pheno_formatted_norm \
-            VAE_ethereal=vae_ethereal-sweep-20_gcta.pheno_formatted_norm \
-            VAE_worthy=vae_worthy-sweep-27_gcta.pheno_formatted_norm \
-            adjSC=adjSC_gcta.pheno_formatted_norm \
-    --out results_heritability
-
-Notes:
-  * adjSC is the severity phenotype itself -> its alignment is the reference "how heritable is the trait".
-  * --relmat-bin auto-detects GCTA (.grm.bin float32 lower-tri) vs PLINK (.rel.bin square/tri, f32/f64).
-  * --covariates gcta.cov (FID IID c1 c2 ...) are residualised out first so alignment reflects genetics,
-    not shared environment. Drop the flag to skip (it will warn).
-  * Feature files may also be plain CSVs (fish_id, f0..fN, label) — auto-detected.
+  python heritability_cka.py --relmat-bin input.grm.bin --relmat-id input.grm.id \
+    --covariates gcta.cov --feats CNN=CNN_gcta.pheno_formatted_norm VAE_1=vae_1_gcta.pheno_formatted_norm ... --out results_heritability
 """
 import argparse, os
 import numpy as np
@@ -49,7 +29,7 @@ def offdiag_corr(K, G):
 # ------------------------- readers -------------------------
 def read_relmat_bin(bin_path, id_path):
     """GCTA .grm.bin (f32 lower-tri) or PLINK .rel.bin (square/tri, f32/f64) -> DataFrame indexed by IID."""
-    ids = [ln.split()[1] for ln in open(id_path) if ln.strip()]      # 2nd col = IID = sequencing id
+    ids = [ln.split()[1] for ln in open(id_path) if ln.strip()]      # 2nd col = IID
     n = len(ids); nb = os.path.getsize(bin_path)
     ntri, nsq = n * (n + 1) // 2, n * n
     for dtype, s in ((np.float32, 4), (np.float64, 8)):
@@ -76,11 +56,11 @@ def load_grm(a):
 
 
 def load_feats(path):
-    """CSV (has 'fish_id') OR GCTA .pheno (whitespace, no header: FID IID p1 p2 ...). -> ids, X."""
-    if 'fish_id' in open(path).readline():
+    """CSV (has 'data_id') OR GCTA .pheno (whitespace, no header: FID IID p1 p2 ...). -> ids, X."""
+    if 'data_id' in open(path).readline():
         df = pd.read_csv(path)
-        ids = df['fish_id'].astype(str).values
-        X = df.drop(columns=[c for c in ('fish_id', 'label') if c in df.columns]).select_dtypes('number')
+        ids = df['data_id'].astype(str).values
+        X = df.drop(columns=[c for c in ('data_id', 'label') if c in df.columns]).select_dtypes('number')
     else:
         df = pd.read_csv(path, sep=r'\s+', header=None)
         ids = df[1].astype(str).values                                # IID
@@ -90,7 +70,7 @@ def load_feats(path):
 
 
 def load_cov(path):
-    """gcta.cov (FID IID ...) or CSV (index=fish_id). -> DataFrame indexed by id."""
+    """gcta.cov (FID IID ...) or CSV (index=data_id). -> DataFrame indexed by id."""
     if ',' in open(path).readline():
         return pd.read_csv(path, index_col=0)
     df = pd.read_csv(path, sep=r'\s+', header=None)
@@ -129,7 +109,7 @@ def main():
         ids, X = load_feats(path)
         keep = np.array([i in grm.index for i in ids])
         if keep.sum() < 3:
-            print(f'[WARN] {name}: {keep.sum()} fish matched the GRM -> skipped'); continue
+            print(f'[WARN] {name}: {keep.sum()} samples matched the GRM -> skipped'); continue
         X, ids = X[keep], ids[keep]
         if cov is not None:
             X = residualise(X, cov, ids)

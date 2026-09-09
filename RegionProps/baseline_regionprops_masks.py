@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """
-RegionProps baseline on binary segmentation masks (the ShapeEmbed comparison baseline).
+RegionProps baseline on binary segmentation masks (ShapeEmbed comparison baseline).
 
-Extracts the 19 scikit-image shape descriptors used by the ShapeEmbed paper, directly
-from the masks (no thresholding needed — the mask IS the segmentation). For each mask
-it keeps the largest connected component (the fish) and computes:
-  area, convex_area, perimeter, axis_major_length, axis_minor_length, extent,
-  eccentricity, solidity, feret_diameter_max, hu_moments (7), bbox (w, h, aspect) = 19.
+Extracts the 19 scikit-image shape descriptors used by the ShapeEmbed paper directly from the
+masks, keeping the largest connected component per mask.
 
 Usage:
-    python baseline_regionprops_masks.py --masks maskF0 --output regionprops_maskF0.csv
+    python baseline_regionprops_masks.py --masks mask_folder --output regionprops.csv
 """
 
 import argparse
@@ -33,7 +30,7 @@ def features_from_mask(path):
     lab = label(binary)
     if lab.max() == 0:
         return None
-    r = max(regionprops(lab), key=lambda x: x.area)   # largest component = the fish
+    r = max(regionprops(lab), key=lambda x: x.area)   # largest component = the sample
     minr, minc, maxr, maxc = r.bbox
     h, w = maxr - minr, maxc - minc
     feats = {
@@ -52,7 +49,7 @@ def features_from_mask(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--masks', default='maskF0', help='folder of binary mask PNGs')
-    ap.add_argument('--output', default='regionprops_maskF0.csv')
+    ap.add_argument('--output', default='regionprops_mask.csv')
     args = ap.parse_args()
 
     files = sorted(glob.glob(os.path.join(args.masks, '*.png')))

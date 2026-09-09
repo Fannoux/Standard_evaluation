@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-Emit the LaTeX validation-vs-test (OOD generalisation gap) table.
-Reads test + the two validation comparison CSVs (VAE landed in a different TrainVal subfolder).
-Reports one probe / one task (default RF, 5-class): Val vs Test macro-F1 and quad-kappa, plus Delta-kappa.
+Emit the LaTeX validation-vs-test (OOD gap) table.
+Default RF, 5-class: Val vs Test macro-F1 and quad-kappa, plus Delta-kappa.
 """
 import os
 import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEST_CSV = os.path.join(HERE, 'HOLDOUT_TestSet_Results', 'ECCV_frozen_TrainTest', 'all_methods_comparison.csv')
-# ECCV_frozen_TrainVal holds the COMPLETE validation comparison (all methods + both VAEs)
+# TrainVal holds the full validation comparison
 VAL_CSV = os.path.join(HERE, 'TrainVal_Results', 'ECCV_frozen_TrainVal', 'all_methods_comparison.csv')
 CLAS_VAL = VAE_VAL = VAL_CSV
 
@@ -20,8 +19,7 @@ METHODS = [
     ('RegionProps',    19,  'ECCV_FROZEN_RegionProps_Test', CLAS_VAL, 'ECCV_FROZEN_RegionProps'),
     ('CNN',            512, 'ECCV_FROZEN_CNN_Test',         CLAS_VAL, 'ECCV_FROZEN_CNN_best312'),
     ('ShapeEmbed',     128, 'ECCV_FROZEN_ShapeEmbed_Test',  CLAS_VAL, 'ECCV_FROZEN_ShapeEmbed'),
-    ('VAE (spring)',   256, 'ECCV_FROZEN_VAE_spring',       VAE_VAL,  'ECCV_FROZEN_VAE_spring'),
-    ('VAE (ethereal)', 256, 'ECCV_FROZEN_VAE_ethereal',     VAE_VAL,  'ECCV_FROZEN_VAE_ethereal'),
+    ('VAE ',           256, 'ECCV_FROZEN_VAE',              VAE_VAL,  'ECCV_FROZEN_VAE'),
 ]
 
 _cache = {}

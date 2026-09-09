@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 """
-Assemble a publication figure grid from run_gradcam outputs:  rows = SC0..4, cols = methods.
+Assemble a figure grid from run_gradcam outputs: rows = label, cols = methods.
 
-Exemplar per grade = the fish (present for ALL methods) with the HIGHEST body-third enrichment among
-well-predicted fish (|E[k]-SC| small) -- i.e. a representative example of the trend, chosen honestly
-from gradcam_perfish.csv and captioned as such.
-
-By default it tiles the saved overlay PNGs. With --rerender (+ --csv/--mask-dir) it RE-RENDERS the
-image-method panels from the raw cams/*.npy: top-mass thresholding (weak maps look weak) + the larva
-outline (background hot-spots are visibly on background). No GPU / model needed for the re-render.
+Exemplar per row = the sample (present for all methods) with the highest body-third enrichment among
+well-predicted samples. By default tiles the saved overlay PNGs; --rerender redraws image panels from
+cams/*.npy with top-mass threshold + outline (no GPU/model needed).
 
 Usage:
   python make_gradcam_grid.py --results results_gradcam --methods CNN ShapeEmbed VAE \
@@ -73,8 +69,8 @@ def index_overlays(overlay_dir, methods):
 
 
 def choose_exemplars(results_dir, methods, scs, idx):
-    """Per SC: among fish with overlays for ALL methods, pick the most representative -- highest body
-    enrichment (image methods), tie-broken by smallest mean |E[k]-SC|. Falls back to |E[k]-SC| only."""
+    """Per row: among samples with overlays for all methods, pick highest body enrichment,
+    tie-broken by smallest mean |E[k]-label|."""
     enr, err = {}, {}
     pf = os.path.join(results_dir, 'gradcam_perfish.csv')
     if os.path.exists(pf):
@@ -97,7 +93,7 @@ def choose_exemplars(results_dir, methods, scs, idx):
         common = sorted(common or [])
         if not common:
             chosen[sc] = None
-            print(f"[warn] SC{sc}: no fish has panels for all methods -> row blank")
+            print(f"[warn] SC{sc}: no sample has panels for all methods -> row blank")
             continue
         chosen[sc] = max(common, key=lambda fid: (enr.get((sc, fid), 0.0),
                                                   -np.mean(err.get((sc, fid), [9.9]))))
@@ -139,14 +135,14 @@ def main():
     ap.add_argument('--rerender', action='store_true',
                     help='re-render image panels from cams/*.npy with top-mass threshold + outline')
     ap.add_argument('--top-frac', type=float, default=0.2, help='fraction of CAM mass to display')
-    ap.add_argument('--csv', help='manifest (for --rerender: fish_id -> image_path)')
+    ap.add_argument('--csv', help='manifest (for --rerender: data_id -> image_path)')
     ap.add_argument('--mask-dir'); ap.add_argument('--mask-ext', default='.png')
     a = ap.parse_args()
     titles = a.titles or a.methods
     if len(titles) != len(a.methods):
         raise SystemExit('[ERR] --titles must have one entry per method')
 
-    # fish_id -> image_path for re-render
+    # data_id -> image_path for re-render
     a._paths = {}
     if a.rerender and a.csv:
         import pandas as pd

@@ -1,19 +1,14 @@
 #!/usr/bin/env python3
 """
-Continuous-severity vs raw-kink-count analysis (does the model track the underlying continuum
-even when discrete 5-class accuracy is low?).
+Continuous-label vs raw-count analysis: does the model track the underlying continuum even when
+discrete multiclass accuracy is low? Fits LogReg + RandomForest on train, forms the expected value
+E[k] = sum_c class_c * P(class_c) per test sample, and correlates it (Spearman) with the raw
+kinks_number from the manifest (joined by data_id).
 
-For one method: fit LogReg + RandomForest on TRAIN features, predict_proba on TEST, form the
-expected severity  E[k] = sum_c class_c * P(class_c)  per test fish, and correlate it (Spearman)
-with the RAW kink count (from the manifest, joined by fish_id) -- NOT the binned SC label.
-A decent rho with low accuracy = the binning discards signal the model actually captures.
+    python continuous_vs_kinks.py --train-csv train.csv --eval-csv test.csv \
+        --manifest manifest.csv --name ShapeEmbed --out results/continuous
 
-Usage:
-  python continuous_vs_kinks.py --train-csv features_train.csv --eval-csv features_test.csv \
-      --manifest <canonical_manifest.csv> --name ShapeEmbed --out results/continuous
-
-Feature CSVs are the shared format (fish_id, f0..fN, label). Manifest must have image_path +
-kinks_number (fish_id joins on basename(image_path) without extension).
+Feature CSVs use the shared format (data_id, f0..fN, label). Manifest needs image_path + kinks_number.
 """
 import argparse, os
 import numpy as np
@@ -26,22 +21,22 @@ from sklearn.ensemble import RandomForestClassifier
 def load(path):
     df = pd.read_csv(path)
     y = df['label'].astype(int).values
-    ids = df['fish_id'].astype(str).values if 'fish_id' in df else np.arange(len(df)).astype(str)
-    X = df.drop(columns=[c for c in ('fish_id', 'label') if c in df.columns]).select_dtypes('number').fillna(0).values
+    ids = df['data_id'].astype(str).values if 'data_id' in df else np.arange(len(df)).astype(str)
+    X = df.drop(columns=[c for c in ('data_id', 'label') if c in df.columns]).select_dtypes('number').fillna(0).values
     return X, y, ids
 
 
 def expected_severity(clf, Xte):
     P = clf.predict_proba(Xte)                      # (n, n_classes_seen)
-    ks = clf.classes_.astype(float)                 # actual class labels present in train
-    return P @ ks                                   # E[k] per fish
+    ks = clf.classes_.astype(float)                 # class labels seen in train
+    return P @ ks                                   # E[k] per sample
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--train-csv', required=True)
     ap.add_argument('--eval-csv', required=True)
-    ap.add_argument('--manifest', required=True, help='canonical split manifest (image_path + kinks_number)')
+    ap.add_argument('--manifest', required=True, help='split manifest (image_path + kinks_number)')
     ap.add_argument('--kink-col', default='kinks_number')
     ap.add_argument('--name', default='method')
     ap.add_argument('--out', default='results/continuous')
@@ -52,16 +47,16 @@ def main():
     sc = StandardScaler().fit(Xtr)                  # fit on train only
     Xtr, Xte = sc.transform(Xtr), sc.transform(Xte)
 
-    # raw kink count per test fish, joined by fish_id == basename(image_path)
+    # raw kink count per test sample, joined by data_id == basename(image_path)
     man = pd.read_csv(a.manifest)
     man['stem'] = man['image_path'].apply(lambda p: os.path.splitext(os.path.basename(str(p)))[0])
     lut = dict(zip(man['stem'], man[a.kink_col]))
     kink = np.array([lut.get(str(i), np.nan) for i in idte], dtype=float)
     matched = ~np.isnan(kink)
-    print(f"[INFO] {matched.sum()}/{len(idte)} test fish matched to manifest kink count")
+    print(f"[INFO] {matched.sum()}/{len(idte)} test samples matched to manifest kink count")
 
     rows = []
-    out = pd.DataFrame({'fish_id': idte, 'SC_label': yte, 'kink_count': kink})
+    out = pd.DataFrame({'data_id': idte, 'SC_label': yte, 'kink_count': kink})
     for nm, clf in [('LogReg', LogisticRegression(max_iter=1000)),
                     ('RF', RandomForestClassifier(random_state=42))]:
         clf.fit(Xtr, ytr)
@@ -79,7 +74,7 @@ def main():
     pd.DataFrame(rows, columns=['classifier', 'rho_Ek_vs_kink', 'rho_Ek_vs_SClabel']).to_csv(
         os.path.join(a.out, f'spearman_{a.name}.csv'), index=False)
 
-    # scatter: E[k] (RF) vs raw kink count, coloured by SC label
+    # scatter: E[k] (RF) vs raw kink count, coloured by class label
     try:
         import matplotlib
         matplotlib.use('Agg')
@@ -87,9 +82,9 @@ def main():
         d = out[matched]
         fig, ax = plt.subplots(figsize=(5, 4))
         sctr = ax.scatter(d['kink_count'], d['E_k_RF'], c=d['SC_label'], cmap='viridis', s=10, alpha=0.5)
-        ax.set_xlabel('raw kink count'); ax.set_ylabel('expected severity E[k] (RF)')
+        ax.set_xlabel('raw kink count'); ax.set_ylabel('expected value E[k] (RF)')
         ax.set_title(f'{a.name}: continuous prediction vs kink count')
-        fig.colorbar(sctr, label='SC label')
+        fig.colorbar(sctr, label='class label')
         fig.tight_layout()
         fig.savefig(os.path.join(a.out, f'scatter_{a.name}.png'), dpi=300)
         print(f"[OK] -> {a.out}/scatter_{a.name}.png")

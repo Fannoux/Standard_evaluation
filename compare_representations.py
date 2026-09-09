@@ -1,29 +1,9 @@
 #!/usr/bin/env python3
 """
-Representation-level comparison of ANY two methods on the SAME fish (no classifier needed).
-
-Answers "do these two representations encode the same shape information?" rather than "which
-scores higher" (that is standard_eval.py's job). Three measures:
-  1. linear CKA           - overall structural similarity of the two feature spaces (0..1, symmetric)
-  2. cross-prediction R^2 - how well representation A linearly predicts each feature of B
-                            (interpretable when B has named features, e.g. RegionProps)
-  3. top canonical corr   - shared axes (CCA); OVERFITS when dims >> n, treat as a sanity flag
-
-Inputs = two feature CSVs in the shared adapter format (fish_id, <features...>, [label]) produced by
-features_to_csv.py or evaluation.py --save-feat. They are aligned by fish_id (intersection), so any
-pair works: latent-vs-RegionProps, CNN-vs-VAE, ShapeEmbed-vs-VAE, etc. Feature COLUMN NAMES are kept,
-so if B is RegionProps the R^2 bars are labelled with the real shape features.
-
-Convention: A = predictor/source (e.g. a learned latent), B = target (e.g. interpretable features).
-CKA and CCA are symmetric; R^2 is A->B by default (add --both-directions for B->A too).
-
-Outputs (written to --out):
-  comparison_summary.txt                 - CKA, mean R^2, CCA, n_fish, provenance/notes
-  cross_prediction_r2_<A>_to_<B>.csv     - per-feature R^2 (whole-A -> each B feature, sorted)
-  r2_barchart_<A>_to_<B>.png             - the interpretability bar figure (top-N features)
-  feature_correlation_clustermap_<A>_vs_<B>.png - clustered feature-wise Pearson r heatmap
-  feature_correlation_<A>_vs_<B>.csv            - the raw r matrix (r^2 = pairwise R^2):
-                                                  which A dims relate to which B features
+Representation-level comparison of two methods on the same samples (no classifier).
+Reports linear CKA, cross-prediction R^2 (A predicts each feature of B), and top canonical
+correlation (CCA). Inputs: two feature CSVs in the shared format (data_id, features..., [label]),
+aligned by data_id. Convention: A = source, B = target; R^2 is A->B (--both-directions adds B->A).
 """
 import argparse, os, json
 import numpy as np, pandas as pd
@@ -36,7 +16,7 @@ from sklearn.model_selection import cross_val_predict
 from sklearn.metrics import r2_score
 from sklearn.cross_decomposition import CCA
 
-ID_CANDIDATES = ['fish_id', 'stem', 'id']
+ID_CANDIDATES = ['data_id', 'stem', 'id']
 NON_FEATURE = {'mask', 'CO6', 'set', 'generation', 'label', 'label_categorical',
                'label_regression', 'severity_score', 'severity_score_adjusted'}
 
@@ -46,17 +26,17 @@ def _stem(s):
 
 
 def load_features(path, id_col=None, label_col='label'):
-    """Read a shared-format CSV -> (features_df indexed by fish_id, label Series or None)."""
+    """Read a feature CSV; returns (features indexed by data_id, label Series or None)."""
     df = pd.read_csv(path)
     idc = id_col or next((c for c in ID_CANDIDATES if c in df.columns), None)
     if idc is None:
         raise SystemExit(f"[ERR] no id column in {path} (looked for {ID_CANDIDATES}; pass --id-col)")
-    fish_id = df[idc].map(_stem)
+    data_id = df[idc].map(_stem)
     label = df[label_col] if label_col in df.columns else None
     drop = NON_FEATURE | {idc, label_col} | set(ID_CANDIDATES)
     feats = df.drop(columns=[c for c in drop if c in df.columns]).select_dtypes('number').fillna(0)
-    feats.index = fish_id.values
-    lab = pd.Series(label.values, index=fish_id.values) if label is not None else None
+    feats.index = data_id.values
+    lab = pd.Series(label.values, index=data_id.values) if label is not None else None
     return feats, lab
 
 
@@ -66,7 +46,7 @@ def lin_cka(X, Y):
 
 
 def cross_pred_r2(Xa, B_df, alpha):
-    """R^2 of predicting each column of B from A (5-fold ridge). Returns {feature: r2}."""
+    """R^2 of predicting each column of B from A with 5-fold ridge; returns {feature: r2}."""
     r2 = {}
     B = B_df.values.astype(float)
     for j, f in enumerate(B_df.columns):
@@ -78,8 +58,8 @@ def cross_pred_r2(Xa, B_df, alpha):
 def barchart(r2, src, dst, out, top_n):
     d = pd.DataFrame(sorted(r2.items(), key=lambda kv: kv[1]), columns=['feature', 'cv_r2'])
     if len(d) > top_n:
-        d = d.tail(top_n)                                   # keep the top-N by R^2
-    colors = ['#007786' if v > 0.8 else '#9ca3af' for v in d['cv_r2']]   # highlight R^2 > 0.8
+        d = d.tail(top_n)
+    colors = ['#007786' if v > 0.8 else '#9ca3af' for v in d['cv_r2']]
     fig, ax = plt.subplots(figsize=(7, max(3, 0.32 * len(d) + 1)))
     ax.barh(d['feature'], d['cv_r2'].clip(lower=0), color=colors)
     ax.set_xlabel(f'CV $R^2$  ({src} latent $\\rightarrow$ {dst} feature)')
@@ -88,20 +68,18 @@ def barchart(r2, src, dst, out, top_n):
 
 
 def corr_clustermap(A_df, B_df, name_a, name_b, out):
-    """Feature-wise Pearson r between every A feature and every B feature, as a hierarchically
-    CLUSTERED heatmap: rows (B) and cols (A) are reordered by similarity with dendrograms, so
-    blocks of related dims/features surface. r^2 = the pairwise R^2. Saves .png + raw .csv."""
+    """Clustered heatmap of feature-wise Pearson r between A and B; saves .png + .csv."""
     import seaborn as sns
     A = StandardScaler().fit_transform(A_df.values.astype(float))
     B = StandardScaler().fit_transform(B_df.values.astype(float))
-    C = np.clip((B.T @ A) / len(A), -1, 1)                  # standardized dot/n = Pearson r
+    C = np.clip((B.T @ A) / len(A), -1, 1)                  # standardized dot / n = Pearson r
     dfC = pd.DataFrame(C, index=B_df.columns, columns=A_df.columns).fillna(0).drop('Unnamed: 0', axis=0, errors='ignore')
     dfC.to_csv(f'{out}/feature_correlation_{name_a}_vs_{name_b}.csv')
     nb, na = dfC.shape
     g = sns.clustermap(
         dfC, cmap='RdBu_r', center=0, vmin=-1, vmax=1,
         figsize=(min(0.45 * na + 4, 22), min(0.4 * nb + 4, 18)),
-        row_cluster=(nb >= 2), col_cluster=(na >= 2),       # need >=2 to cluster an axis
+        row_cluster=(nb >= 2), col_cluster=(na >= 2),       # need >=2 points to cluster an axis
         annot=(nb * na <= 400), fmt='.2f', annot_kws={'size': 6},
         xticklabels=(na <= 60), yticklabels=True,
         dendrogram_ratio=(0.12, 0.12), cbar_pos=(0.02, 0.83, 0.03, 0.14),
@@ -129,7 +107,7 @@ def analyse(name_a, name_b, A, B, out, alpha, top_n, both, note, labels):
     pd.DataFrame(sorted(r2_ab.items(), key=lambda kv: -kv[1]), columns=['feature', 'cv_r2']) \
         .to_csv(f'{out}/cross_prediction_r2_{name_a}_to_{name_b}.csv', index=False)
     barchart(r2_ab, name_a, name_b, f'{out}/r2_barchart_{name_a}_to_{name_b}.png', top_n)
-    corr_clustermap(A, B, name_a, name_b, out)              # feature-wise correlation clustermap
+    corr_clustermap(A, B, name_a, name_b, out)
 
     summary = {
         'method_A': name_a, 'method_B': name_b,
@@ -141,7 +119,7 @@ def analyse(name_a, name_b, A, B, out, alpha, top_n, both, note, labels):
         'per_feature_R2_A_to_B': {k: round(v, 3) for k, v in sorted(r2_ab.items(), key=lambda kv: -kv[1])},
         'note': note,
     }
-    if both:                                                # optional reverse direction B->A
+    if both:                                                # reverse direction B->A
         r2_ba = cross_pred_r2(Xb, pd.DataFrame(Xa, columns=A.columns), alpha)
         pd.DataFrame(sorted(r2_ba.items(), key=lambda kv: -kv[1]), columns=['feature', 'cv_r2']) \
             .to_csv(f'{out}/cross_prediction_r2_{name_b}_to_{name_a}.csv', index=False)
@@ -152,10 +130,10 @@ def analyse(name_a, name_b, A, B, out, alpha, top_n, both, note, labels):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--feat-a', required=True, help='feature CSV A (predictor/source, e.g. a latent)')
-    ap.add_argument('--feat-b', required=True, help='feature CSV B (target, e.g. RegionProps)')
+    ap.add_argument('--feat-a', required=True, help='feature CSV A (predictor/source)')
+    ap.add_argument('--feat-b', required=True, help='feature CSV B (target)')
     ap.add_argument('--name-a', default=None); ap.add_argument('--name-b', default=None)
-    ap.add_argument('--id-col', default=None, help='override the fish-id column (default: auto-detect)')
+    ap.add_argument('--id-col', default=None, help='override the data-id column (default: auto-detect)')
     ap.add_argument('--label-col', default='label')
     ap.add_argument('--alpha', type=float, default=10.0, help='ridge regularisation for cross-prediction')
     ap.add_argument('--top-n', type=int, default=30, help='max features shown in the R^2 bar chart')
@@ -172,9 +150,9 @@ def main():
 
     common = A.index.intersection(B.index)
     if len(common) < 10:
-        raise SystemExit(f"[ERR] only {len(common)} shared fish between A and B — check the id columns match")
+        raise SystemExit(f"[ERR] only {len(common)} shared samples between A and B — check the id columns match")
     if len(common) < len(A) or len(common) < len(B):
-        print(f"[INFO] aligned on {len(common)} shared fish (A had {len(A)}, B had {len(B)})")
+        print(f"[INFO] aligned on {len(common)} shared samples (A had {len(A)}, B had {len(B)})")
     A, B = A.loc[common], B.loc[common]
     labels = (la.loc[common] if la is not None else (lb.loc[common] if lb is not None else None))
 

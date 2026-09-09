@@ -2,11 +2,10 @@
 """
 CLI driver for the occlusion interpretability analysis.
 
-Loads a stratified test subset once, runs every requested method on the same fish, and writes a
-combined results CSV plus a per-method region table. RegionProps needs no model weights, so
-`--methods RegionProps` validates the pipeline before wiring the neural encoders.
+Loads a stratified test subset once, runs each requested method on the same samples, and writes a
+combined results CSV plus per-method region tables.
 
-Example (see run_occlusion.slurm):
+Example:
   python run_occlusion.py --csv manifest.csv --mask-dir masks --mask-ext .npy \
       --split test --n-per-class 40 --methods RegionProps CNN VAE ShapeEmbed \
       --cnn-weights cnn.pth --vae-weights vae.pth --shapeembed-weights se.pth \
@@ -27,8 +26,8 @@ def _device():
         return 'cpu'
 
 
-# ---------------- model-load hooks (wired to the sibling repos) ----------------
-# The model classes live in the sibling Ziram repos; add them to sys.path so they import.
+# ---------------- model-load hooks ----------------
+# Model classes live in sibling repos; add them to sys.path so they import.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 CNN_SRC = os.path.join(_HERE, '..', '..', 'scripts_cnn')       # pyimagesearch.classifier / .config
 VAE_SRC = os.path.join(_HERE, '..', '..', 'VAE')        # src_vae.model.VAEModel
@@ -43,20 +42,14 @@ def _add_path(p):
 
 
 def load_cnn(weights, device, yaml=None, src=None):
-    """Larval_MLClassifier, loaded exactly as evaluation.py (model_kwargs come from run_info.yaml).
-    Returns (model, cfg) where cfg carries the run's im_size/mean/std for matched preprocessing.
-
-    NOTE: the classifier builds its backbone via torch.hub.load('pytorch/vision:v0.10.0','resnet18'),
-    whose OLD torchvision source does `from torch.onnx.symbolic_opset9 import _cast_Long` -- removed in
-    modern torch -> ImportError. We don't need the hub download: build an identical resnet18 from the
-    INSTALLED torchvision (the trained state_dict overwrites the weights anyway). Shim is scoped to
-    resnet18 and restored right after construction."""
+    """Load Larval_MLClassifier; returns (model, cfg) with im_size/mean/std for preprocessing."""
     import torch, torchvision
     _add_path(src or CNN_SRC)
     from pyimagesearch.classifier import Larval_MLClassifier
     from pyimagesearch.config import params_fromYAML
     import torch.hub as _hub
     _orig_load = _hub.load
+    # build resnet18 from installed torchvision; torch.hub's old source fails to import on modern torch
     def _load_shim(*a, **k):
         name = k.get('model') if 'model' in k else (a[1] if len(a) > 1 else None)
         if name == 'resnet18':
@@ -77,15 +70,7 @@ def load_cnn(weights, device, yaml=None, src=None):
 
 
 def load_vae(weights, device, latent_dim=None, capacity=16, depth=4, input_size=352, src=None):
-    """the VAE. Occlusion only needs the ENCODER (image -> posterior mean mu).
-
-    Two checkpoint flavours are handled, auto-detected from the keys:
-      * ResNet-18 encoder VAE (the current model): keys 'vae.encoder.conv1', 'vae.encoder.layerN...',
-        'vae.mean' = Linear(512, L). We REBUILD the encoder from the checkpoint (torchvision resnet18
-        with a matched first conv + a Linear head), so it does NOT depend on the exact repo version.
-      * plain-conv VAEModel (older repo code): keys 'vae.encoder.0.0...', 'vae.mean' = Linear(HUGE, L).
-        Built from src_vae.model.VAEModel at --vae-src.
-    In both cases the returned object exposes model.vae.get_latent(x) -> (mean, logvar)."""
+    """Load the VAE encoder (auto-detects ResNet-18 vs plain-conv checkpoint)."""
     import torch
     sd = torch.load(weights, map_location=device)
 
@@ -93,14 +78,14 @@ def load_vae(weights, device, latent_dim=None, capacity=16, depth=4, input_size=
         import torch.nn as nn, torchvision
         in_ch = int(sd['vae.encoder.conv1.weight'].shape[1])
         lat = latent_dim or int(sd['vae.mean.weight'].shape[0])
-        feat = int(sd['vae.mean.weight'].shape[1])          # resnet feature dim (512 for resnet18)
+        feat = int(sd['vae.mean.weight'].shape[1])          # resnet feature dim
 
         class _Enc(nn.Module):
             def __init__(self):
                 super().__init__()
                 net = torchvision.models.resnet18(weights=None)
                 net.conv1 = nn.Conv2d(in_ch, 64, kernel_size=7, stride=2, padding=3, bias=False)
-                net.fc = nn.Identity()                      # expose the 512-d avgpool feature
+                net.fc = nn.Identity()                      # expose the avgpool feature
                 self.encoder = net
                 self.mean = nn.Linear(feat, lat)
                 self.var = nn.Linear(feat, lat)
@@ -112,7 +97,7 @@ def load_vae(weights, device, latent_dim=None, capacity=16, depth=4, input_size=
             def __init__(self): super().__init__(); self.vae = _Enc()
 
         model = _Wrap().to(device)
-        info = model.load_state_dict(sd, strict=False)      # decoder keys are unexpected -> ignored
+        info = model.load_state_dict(sd, strict=False)      # ignore decoder keys
         need = [k for k in info.missing_keys if k.startswith(('vae.encoder', 'vae.mean', 'vae.var'))]
         if need:
             raise SystemExit(f"[ERR] VAE encoder weights did not fully load; missing e.g. {need[:3]}")
@@ -135,9 +120,7 @@ def load_vae(weights, device, latent_dim=None, capacity=16, depth=4, input_size=
 
 def load_shapeembed(weights, device, matrix_size=None, latent_dim=None,
                     space_dim=2, padding=True, decoder_depth=5, src=None):
-    """ShapeEmbedLite MyNet. latent_dim and matrix_size are auto-inferred from the checkpoint:
-    z_mean.weight -> latent_dim; decoder_layers.0.weight -> matrix_size (= hidden[0] / 2**(depth-1)).
-    Returns (model, matrix_size) so the extractor builds distance matrices of the right size."""
+    """Load ShapeEmbedLite MyNet (latent_dim/matrix_size inferred from checkpoint); returns (model, matrix_size)."""
     import torch
     _add_path(src or SE_SRC)
     from utils.models import MyNet
@@ -145,7 +128,7 @@ def load_shapeembed(weights, device, matrix_size=None, latent_dim=None,
     if latent_dim is None:
         latent_dim = int(sd['z_mean.weight'].shape[0])
     if matrix_size is None:
-        # DecoderMLP's final Linear outputs space_dim * num_points, and num_points == matrix_size.
+        # final decoder Linear outputs space_dim * matrix_size
         import re
         li = max(int(re.match(r'decoder\.decoder_layers\.(\d+)\.weight', k).group(1))
                  for k in sd if re.match(r'decoder\.decoder_layers\.\d+\.weight', k))
@@ -178,17 +161,13 @@ def build_extractors(methods, args, device):
 
 
 def fit_probe(train_csv, label_col='label'):
-    """Fit the severity read-out on a method's TRAIN feature CSV -- reproduces standard_eval's
-    report_holdout exactly: StandardScaler.fit(train) then LogisticRegression on the SCALED train.
-    Returns (scaler, clf); make_predictor_probe turns it into E[k]=sum_k k*P(k). No .pkl needed.
-    NB: the CSV feature order MUST match what the occlusion extractor emits (guaranteed for the learned
-    latents CNN/VAE/ShapeEmbed; for RegionProps use a CSV built by THIS repo's extractor)."""
+    """Fit the read-out on a method's train feature CSV: StandardScaler + LogisticRegression. Returns (scaler, clf)."""
     import numpy as np
     from sklearn.preprocessing import StandardScaler
     from sklearn.linear_model import LogisticRegression
     df = pd.read_csv(train_csv)
     y = df[label_col].astype(int).values
-    X = df.drop(columns=[c for c in ('fish_id', label_col) if c in df.columns]).select_dtypes('number').values.astype(float)
+    X = df.drop(columns=[c for c in ('data_id', label_col) if c in df.columns]).select_dtypes('number').values.astype(float)
     scaler = StandardScaler().fit(X)
     clf = LogisticRegression(max_iter=3000).fit(scaler.transform(X), y)
     print(f"[probe] fit on {os.path.basename(train_csv)}: n={len(y)} dims={X.shape[1]} "
@@ -197,8 +176,7 @@ def fit_probe(train_csv, label_col='label'):
 
 
 def build_pipelines(methods, args, device):
-    """Return {name: (extract_fn, predict_fn)}. In 'latent' mode predict is the shared ||features||;
-    in 'probe' mode each method gets its OWN read-out fit from its --probe-train NAME=path CSV."""
+    """Return {name: (extract_fn, predict_fn)} for each method."""
     exts = build_extractors(methods, args, device)
     if args.predict != 'probe':
         predict = make_predictor_latent()
@@ -222,14 +200,13 @@ def main():
     ap.add_argument('--split', default='test'); ap.add_argument('--label-col', default='severity_score_adjusted')
     ap.add_argument('--n-per-class', type=int, default=40); ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--work-size', type=int, default=512)
-    ap.add_argument('--subset-file', default='occlusion_subset_ids.txt', help='freeze/reuse the exact fish set')
+    ap.add_argument('--subset-file', default='occlusion_subset_ids.txt', help='freeze/reuse the exact sample set')
     ap.add_argument('--methods', nargs='+', default=['RegionProps'],
                     choices=['RegionProps', 'CNN', 'VAE', 'ShapeEmbed'])
     ap.add_argument('--cnn-weights'); ap.add_argument('--vae-weights'); ap.add_argument('--shapeembed-weights')
     ap.add_argument('--cnn-yaml', help='run_info.yaml for the CNN (default: next to --cnn-weights)')
     ap.add_argument('--cnn-src', help='path to the scripts_cnn repo (default: ../../scripts_cnn)')
-    ap.add_argument('--vae-src', help="path to the VAE repo, i.e. the dir CONTAINING src_vae/ "
-                                      "(default: ../../VAE)")
+    ap.add_argument('--vae-src', help="path to the VAE repo (dir containing src_vae/; default: ../../VAE)")
     ap.add_argument('--se-src', help='path to the ShapeEmbedLite repo (default: ../../ShapeEmbedLite)')
     ap.add_argument('--vae-latent', type=int, help='VAE latent dim (default: infer from checkpoint)')
     ap.add_argument('--vae-size', type=int, default=352, help='VAE input size (matches training resize)')
@@ -240,20 +217,19 @@ def main():
                     help='disable ShapeEmbed circular padding (training used cir_pad -> default ON)')
     ap.add_argument('--predict', choices=['latent', 'probe'], default='latent')
     ap.add_argument('--probe-train', nargs='+', metavar='NAME=CSV',
-                    help='probe mode: per-method TRAIN feature CSV, e.g. CNN=features_train.csv '
-                         'RegionProps=rp_train.csv (fit on the fly, no .pkl needed)')
-    ap.add_argument('--probe-label', default='label', help="label column in the train CSVs (shared format)")
+                    help='probe mode: per-method train feature CSV (NAME=path)')
+    ap.add_argument('--probe-label', default='label', help="label column in the train CSVs")
     ap.add_argument('--out', default='results_occlusion')
     a = ap.parse_args()
 
     device = _device(); print(f"[device] {device}")
-    os.makedirs(a.out, exist_ok=True)             # make OUT first so the subset-freeze can write into it
+    os.makedirs(a.out, exist_ok=True)             # create OUT before the subset-freeze writes into it
     imgs, msks, meta = load_data_real(a.csv, label_col=a.label_col, split=a.split,
                                       mask_dir=a.mask_dir, mask_col=a.mask_col, mask_ext=a.mask_ext,
                                       n_per_class=a.n_per_class, work_size=a.work_size,
                                       seed=a.seed, subset_file=a.subset_file)
     if not imgs:
-        raise SystemExit("[ERR] no fish loaded -- check --csv / --mask-dir / --mask-ext")
+        raise SystemExit("[ERR] no samples loaded -- check --csv / --mask-dir / --mask-ext")
 
     pipe = build_pipelines(a.methods, a, device)
     summary, per_fish = [], []
@@ -271,7 +247,7 @@ def main():
 
     pd.concat(per_fish).to_csv(os.path.join(a.out, 'occlusion_perfish_all.csv'), index=False)
     pd.DataFrame(summary).to_csv(os.path.join(a.out, 'occlusion_summary.csv'), index=False)
-    print(f"\n[OK] -> {a.out}/occlusion_summary.csv (+ per-method region tables, per-fish CSV)")
+    print(f"\n[OK] -> {a.out}/occlusion_summary.csv (+ per-method region tables, per-sample CSV)")
 
 
 if __name__ == '__main__':

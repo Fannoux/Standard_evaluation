@@ -3,9 +3,7 @@ python heritability_cka.py \
   --feats CNN=genetic_data/CNN_gcta.pheno_formatted_norm \
           RegionProps=genetic_data/RegionProps_gcta.pheno_formatted_norm \
           ShapeEmbed=genetic_data/shapeembed_gcta.pheno_formatted_norm \
-          VAE_spring=genetic_data/vae_spring-sweep-14_gcta.pheno_formatted_norm \
-          VAE_ethereal=genetic_data/vae_ethereal-sweep-20_gcta.pheno_formatted_norm \
-          VAE_worthy=genetic_data/vae_worthy-sweep-27_gcta.pheno_formatted_norm \
+          VAE=genetic_data/vae_gcta.pheno_formatted_norm \
           adjSC=genetic_data/adjSC_gcta.pheno_formatted_norm \
   --out results_heritability_nocov
   #--covariates genetic_data/gcta.cov \

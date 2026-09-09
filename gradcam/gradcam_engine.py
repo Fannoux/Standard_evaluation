@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 """Grad-CAM for the image backbones (CNN, VAE encoder) and a contour-saliency variant for ShapeEmbed.
 
-The target for each backbone is a linear severity head fit on its train representation (a scaler +
-logistic regression folded into one nn.Linear), read out as the expected severity
-E[k] = sum_k k * softmax(logits)_k. Back-propagating this scalar into the last convolutional block
-gives the activation map. The driver (run_gradcam.py) handles data loading, preprocessing and IO.
-
+Target is the expected class E[k] from a linear head; backprop into the last conv block gives the map.
 Reference: Selvaraju et al., Grad-CAM, ICCV 2017.
 """
 import numpy as np
@@ -16,13 +12,7 @@ import torch.nn.functional as F
 
 # --------------------------- matched differentiable head ---------------------------
 def _fold_logreg_into_linear(X, y, device='cpu'):
-    """Fit StandardScaler+LogisticRegression on (X, y) and FOLD both into ONE differentiable
-    nn.Linear(feat -> C). Returns (head, classes).
-
-    Folding: logits = coef @ (x-mean)/scale + intercept
-                    = (coef/scale) @ x + (intercept - coef @ (mean/scale))
-    so the head takes RAW features and reproduces scaler+LogReg exactly, while staying differentiable
-    (what Grad-CAM backprops). Matches standard_eval / the occlusion probe."""
+    """Fit StandardScaler+LogisticRegression on (X, y), fold both into one differentiable nn.Linear."""
     from sklearn.preprocessing import StandardScaler
     from sklearn.linear_model import LogisticRegression
     X = np.asarray(X, dtype=float); y = np.asarray(y).astype(int)
@@ -42,23 +32,19 @@ def _fold_logreg_into_linear(X, y, device='cpu'):
 
 
 def fit_head_from_array(X, y, device='cpu'):
-    """Fit the matched severity head on features RE-EXTRACTED by the Grad-CAM forward pass (X, y).
-    This is the CORRECT path: the head sees the same feature distribution it will see at CAM time,
-    so it is immune to preprocessing differences vs the archived features_*.csv."""
+    """Fit the label head on features re-extracted by the Grad-CAM forward pass."""
     head, classes = _fold_logreg_into_linear(X, y, device)
     print(f"[head] fit on {len(y)} re-extracted features: feat={np.shape(X)[1]} classes={classes.tolist()}")
     return head, classes
 
 
 def fit_torch_head(train_csv, label_col='label', device='cpu'):
-    """FALLBACK: fit the head on an archived feature CSV (fish_id, f0..fN, label). Only valid if that
-    CSV was produced by the SAME extraction as the Grad-CAM forward pass -- otherwise the head is on
-    the wrong feature scale (flat E[k]). Prefer fit_head_from_array on re-extracted features."""
+    """Fallback: fit the head on an archived feature CSV (data_id, f0..fN, label)."""
     import os
     import pandas as pd
     df = pd.read_csv(train_csv)
     y = df[label_col].astype(int).values
-    X = df.drop(columns=[c for c in ('fish_id', label_col) if c in df.columns]).select_dtypes('number').values.astype(float)
+    X = df.drop(columns=[c for c in ('data_id', label_col) if c in df.columns]).select_dtypes('number').values.astype(float)
     head, classes = _fold_logreg_into_linear(X, y, device)
     print(f"[head] {os.path.basename(train_csv)}: feat={X.shape[1]} classes={classes.tolist()} "
           f"(folded scaler+LogReg, from ARCHIVED csv)")
@@ -66,7 +52,7 @@ def fit_torch_head(train_csv, label_col='label', device='cpu'):
 
 
 def expected_severity(head, feat, classes):
-    """E[k] = sum_k k * softmax(head(feat))_k -- the differentiable severity scalar Grad-CAM targets."""
+    """Expected class E[k] = sum_k k * softmax(head(feat))_k."""
     ks = torch.as_tensor(classes, dtype=torch.float32, device=feat.device)
     return (torch.softmax(head(feat), dim=1) * ks).sum()
 
@@ -103,8 +89,7 @@ class GradCAM:
 
 
 def image_gradcam(backbone, target_layer, feature_fn, head, classes, x, out_hw, device='cpu'):
-    """Grad-CAM for one image. feature_fn(backbone, x) -> penultimate feature tensor [1, F]; the target
-    is E[k] through the matched head. Returns (cam2d in [0,1] at out_hw, E[k] value)."""
+    """Grad-CAM for one image. Returns (cam2d in [0,1] at out_hw, E[k] value)."""
     backbone.eval()
     x = x.to(device).requires_grad_(True)                          # force grad through a frozen backbone
     cam = GradCAM(target_layer)
@@ -121,9 +106,8 @@ def image_gradcam(backbone, target_layer, feature_fn, head, classes, x, out_hw, 
 
 # --------------------------- contour saliency (ShapeEmbed) ---------------------------
 def contour_saliency(se_model, dm, head, classes, device='cpu'):
-    """Saliency per CONTOUR POINT for the shape backbone: backprop E[k] to the input distance matrix
-    and reduce |grad| over each point's row+column. dm: [1,1,P,P] tensor. Returns (saliency[P] in
-    [0,1], E[k]).  se_model(dm) -> (preproc, recon, z, z_mean, z_log_var, scale); we use z_mean."""
+    """Per contour-point saliency: backprop E[k] to the input distance matrix, reduce |grad| over each
+    point's row+column. dm: [1,1,P,P]. Returns (saliency[P] in [0,1], E[k])."""
     se_model.eval()
     dm = dm.to(device).clone().requires_grad_(True)
     out = se_model(dm)
